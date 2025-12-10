@@ -1,116 +1,142 @@
 import streamlit as st
-import leafmap.foliumap as leafmap
 import numpy as np
+import rasterio
 import matplotlib.pyplot as plt
-from PIL import Image
-import requests
-import tempfile
+import leafmap.foliumap as leafmap
+from streamlit.components.v1 import html
 
-st.set_page_config(page_title="Vertiport Suitability Explorer", layout="wide")
+# ----------------------------
+# PAGE SETUP
+# ----------------------------
+st.set_page_config(page_title="Salt Lake Suitability Explorer", layout="wide")
 
-st.title("Vertiport Suitability Visualization – Salt Lake City")
+st.title("🌄 Salt Lake City Suitability Analysis Web App")
+st.markdown("Explore suitability raster layers using an interactive map and charts.")
 
-# Raster sources
-raster_urls = {
-    "Vacant Land Suitability":
-        "https://raw.githubusercontent.com/AmesSky/Final_Viz_Suit/main/data/SLC_Suit_VC.tif",
-    "Commercial/Industrial Suitability":
-        "https://raw.githubusercontent.com/AmesSky/Final_Viz_Suit/main/data/SLC_Suit_CI.tif"
+# ----------------------------
+# RASTER DATA (GitHub URLs)
+# ----------------------------
+RASTER_URLS = {
+    "Vacant Land Suitability": "https://raw.githubusercontent.com/AmesSky/Final_Viz_Suit/main/SLC_Suit_VC.tif",
+    "Commercial Suitability": "https://raw.githubusercontent.com/AmesSky/Final_Viz_Suit/main/SLC_Suit_CI.tif",
 }
 
-selected_name = st.selectbox("Choose dataset:", raster_urls.keys())
-url = raster_urls[selected_name]
+selected_raster = st.sidebar.selectbox("Select a suitability raster:", list(RASTER_URLS.keys()))
+raster_path = RASTER_URLS[selected_raster]
 
-# Download raster
+
+# ----------------------------
+# LOAD RASTER SAFELY
+# ----------------------------
 @st.cache_data
-def download_raster(url):
-    r = requests.get(url)
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tif")
-    tmp.write(r.content)
-    tmp.flush()
-    return tmp.name
+def load_raster(raster_url):
+    with rasterio.open(raster_url) as src:
+        arr = src.read(1)
+        profile = src.profile
+        bounds = src.bounds
+    return arr, profile, bounds
 
-local_path = download_raster(url)
 
-# Load TIFF (indexed)
-img = Image.open(local_path).convert("P")
-arr = np.array(img).astype("int32")
+arr, profile, bounds = load_raster(raster_path)
 
-# -----------------------------
-# Reclassify scaled values → 1–5
-# -----------------------------
-reclass_map = {
-    17: 1,   # neutral
-    34: 2,   # possible
-    51: 3,   # unsuitable
-    68: 4,   # suitable
-    85: 5    # highly suitable
-}
+st.subheader("Raster Information")
+st.write(f"Shape: {arr.shape}")
+st.write(f"Min value: {np.min(arr)}, Max value: {np.max(arr)}")
 
-arr_reclass = np.zeros_like(arr)
+unique_vals = np.unique(arr)
+st.write("Unique raster values:", unique_vals)
 
-for old, new in reclass_map.items():
-    arr_reclass[arr == old] = new
 
-valid_values = arr_reclass[arr_reclass > 0]
-
-# -----------------------------
-# Histogram
-# -----------------------------
+# ----------------------------
+# HISTOGRAM (STATIC)
+# ----------------------------
 st.subheader("Suitability Histogram")
 
-fig, ax = plt.subplots(figsize=(5, 4))
-ax.hist(valid_values, bins=[1,2,3,4,5,6], edgecolor='black', color='green')
-ax.set_xticks([1,2,3,4,5])
-ax.set_xlabel("Suitability Class")
-ax.set_ylabel("Frequency")
+fig, ax = plt.subplots(figsize=(6, 3))
+
+ax.hist(arr.flatten(), bins=len(unique_vals), edgecolor="black")
+ax.set_title("Distribution of Raster Values")
+ax.set_xlabel("Suitability Value")
+ax.set_ylabel("Count")
+
 st.pyplot(fig)
 
-# -----------------------------
-# Color mapping for overlay
-# -----------------------------
+
+# ----------------------------
+# SUITABILITY COLOR MAP
+# ----------------------------
 color_map = {
-    1: (191, 191, 191, 255),   # neutral
-    2: (255, 255, 0, 255),     # possible
-    3: (0, 0, 255, 255),       # unsuitable
-    4: (0, 255, 0, 255),       # suitable
-    5: (255, 0, 0, 255)        # highly suitable
+    1: "#BEBEBE",   # neutral (gray)
+    2: "#FFD700",   # possible (yellow)
+    3: "#800080",   # unsuitable (purple)
+    4: "#00FF00",   # suitable (green)
+    5: "#FF0000",   # highly suitable (red)
 }
 
-rgba = np.zeros((arr.shape[0], arr.shape[1], 4), dtype=np.uint8)
-
-for val, color in color_map.items():
-    rgba[arr_reclass == val] = color
-
-# Save PNG overlay
-png_temp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-Image.fromarray(rgba).save(png_temp.name)
-
-# -----------------------------
-# Map
-# -----------------------------
 st.subheader("Interactive Suitability Map")
 
-m = leafmap.Map(center=[40.57, -111.92], zoom=11)
-m.add_basemap("Esri.WorldImagery")
+# ----------------------------
+# LEAFMAP SETUP (FOLIUM BACKEND)
+# ----------------------------
+m = leafmap.Map(center=[40.75, -111.9], zoom=10)
 
-bounds = [[40.501, -112.085], [40.639, -111.754]]
+# Add basemap
+m.add_basemap("HYBRID")
+
+
+# ----------------------------
+# BUILD COLOR OVERLAY PNG
+# ----------------------------
+def create_color_png(arr):
+    """Convert classified raster to an RGB image for overlay."""
+    rgb = np.zeros((arr.shape[0], arr.shape[1], 3), dtype=np.uint8)
+
+    for value, hex_color in color_map.items():
+        rgb[arr == value] = tuple(int(hex_color[i:i+2], 16) for i in (1, 3, 5))
+
+    return rgb
+
+
+rgb_image = create_color_png(arr)
+
+
+# ----------------------------
+# ADD RASTER TO MAP
+# ----------------------------
+# Build bounds for folium
+img_bounds = [
+    [bounds.bottom, bounds.left],
+    [bounds.top, bounds.right],
+]
 
 m.add_image(
-    png_temp.name,
-    bounds=bounds,
-    opacity=0.55,
-    layer_name=selected_name
+    rgb_image,
+    img_bounds,
+    opacity=0.7,
+    name=selected_raster
 )
 
-legend_dict = {
-    "neutral": "#bfbfbf",
-    "possible": "#ffff00",
-    "unsuitable": "#0000ff",
-    "suitable": "#00ff00",
-    "highly suitable": "#ff0000"
-}
+m.add_layer_control()
 
-m.add_legend(title="Suitability Classes", legend_dict=legend_dict)
 
-m.to_streamlit(height=650)
+# ----------------------------
+# RENDER FULLY INTERACTIVE MAP
+# ----------------------------
+map_html = m.to_html()
+html(map_html, height=700)
+
+
+# ----------------------------
+# LEGEND
+# ----------------------------
+st.subheader("Legend")
+for label, color in zip(
+        ["neutral", "possible", "unsuitable", "suitable", "highly suitable"],
+        ["#BEBEBE", "#FFD700", "#800080", "#00FF00", "#FF0000"]):
+
+    st.markdown(
+        f"<div style='display:flex;align-items:center;'>"
+        f"<div style='width:20px;height:20px;background:{color};margin-right:10px;'></div>"
+        f"{label}</div>",
+        unsafe_allow_html=True
+    )
