@@ -1,7 +1,3 @@
-# -----------------------
-# Load raster and reclassify to RGBA colors
-# -----------------------
-
 import streamlit as st
 import leafmap.foliumap as leafmap
 import numpy as np
@@ -10,9 +6,20 @@ from PIL import Image
 import requests
 import tempfile
 
+# ---------------------------------------------------------
+# Page setup
+# ---------------------------------------------------------
 st.set_page_config(page_title="Vertiport Suitability Explorer", layout="wide")
 
-# GitHub raster URLs
+st.title("Vertiport Suitability Visualization – Salt Lake City")
+st.markdown("""
+This dashboard visualizes **vertiport suitability** for Salt Lake City based on the classified raster datasets.
+Use the selector to switch between **Vacant Land** and **Commercial/Industrial Land** suitability maps.
+""")
+
+# ---------------------------------------------------------
+# Raster URLs from GitHub
+# ---------------------------------------------------------
 raster_urls = {
     "Vacant Land Suitability":
         "https://raw.githubusercontent.com/AmesSky/Final_Viz_Suit/main/data/SLC_Suit_VC.tif",
@@ -20,10 +27,12 @@ raster_urls = {
         "https://raw.githubusercontent.com/AmesSky/Final_Viz_Suit/main/data/SLC_Suit_CI.tif"
 }
 
-selected_name = st.selectbox("Choose dataset:", list(raster_urls.keys()))
+selected_name = st.selectbox("Choose a dataset:", list(raster_urls.keys()))
 url = raster_urls[selected_name]
 
-# Download raster from GitHub
+# ---------------------------------------------------------
+# Download raster file to temporary directory
+# ---------------------------------------------------------
 @st.cache_data
 def download_raster(url):
     r = requests.get(url)
@@ -34,16 +43,20 @@ def download_raster(url):
 
 local_path = download_raster(url)
 
-# Read raster as array
+# ---------------------------------------------------------
+# Load TIFF (PIL – no georeferencing but values preserved)
+# ---------------------------------------------------------
 img = Image.open(local_path)
 arr = np.array(img)
 
-# Suitability classes (your actual values)
+# ---------------------------------------------------------
+# Suitability Classes (your exact values)
 # 1 = neutral
 # 2 = possible
 # 3 = unsuitable
 # 4 = suitable
 # 5 = highly suitable
+# ---------------------------------------------------------
 
 color_map = {
     1: (191, 191, 191, 255),   # neutral (gray)
@@ -53,32 +66,61 @@ color_map = {
     5: (255, 0, 0, 255)        # highly suitable (red)
 }
 
-# Create color raster
 colored_img = np.zeros((arr.shape[0], arr.shape[1], 4), dtype=np.uint8)
 
 for val, color in color_map.items():
     colored_img[arr == val] = color
 
-# Save colored PNG
+# ---------------------------------------------------------
+# Save colored raster PNG for overlay
+# ---------------------------------------------------------
 png_temp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
 Image.fromarray(colored_img).save(png_temp.name)
 
-# -----------------------
-# Spatial visualization
-# -----------------------
-st.subheader("Spatial Visualization")
+# ---------------------------------------------------------
+# Histogram of suitability values
+# ---------------------------------------------------------
+st.subheader("Suitability Value Histogram")
 
-m = leafmap.Map(center=[40.75, -111.9], zoom=10)
+flat_vals = arr.flatten()
+flat_vals = flat_vals[(flat_vals >= 1) & (flat_vals <= 5)]
+
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.hist(flat_vals, bins=[1,2,3,4,5,6], color='green', edgecolor='black')
+ax.set_xticks([1, 2, 3, 4, 5])
+ax.set_xlabel("Suitability Class")
+ax.set_ylabel("Frequency")
+ax.set_title("Distribution of Suitability Values")
+st.pyplot(fig)
+
+# ---------------------------------------------------------
+# Interactive Map Section
+# ---------------------------------------------------------
+st.subheader("Interactive Suitability Map")
+
+m = leafmap.Map(center=[40.57, -111.92], zoom=11)
+
+# Add basemap
 m.add_basemap("Esri.WorldImagery")
 
-# Adjust bounds to match Salt Lake City region
+# ---------------------------------------------------------
+# Add the raster overlay using your correct WGS84 bounds
+# Bounds computed from your EPSG:26912 raster:
+# South = 40.501
+# North = 40.639
+# West  = -112.085
+# East  = -111.754
+# ---------------------------------------------------------
 m.add_image(
     png_temp.name,
-    bounds=[[40.4, -112.2], [41.1, -111.6]],
+    bounds=[[40.501, -112.085], [40.639, -111.754]],
     opacity=0.55,
     layer_name=selected_name
 )
 
+# ---------------------------------------------------------
+# Custom Legend (matches your raster)
+# ---------------------------------------------------------
 legend_dict = {
     "neutral": "#bfbfbf",
     "possible": "#ffff00",
@@ -89,4 +131,7 @@ legend_dict = {
 
 m.add_legend(title="Suitability Classes", legend_dict=legend_dict)
 
-m.to_streamlit(height=600)
+# ---------------------------------------------------------
+# Render the interactive map
+# ---------------------------------------------------------
+m.to_streamlit(height=650)
