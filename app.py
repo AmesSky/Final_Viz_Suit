@@ -55,15 +55,33 @@ for old, new in reclass_map.items():
 valid_values = arr_reclass[arr_reclass > 0]
 
 # -----------------------------
-# Histogram
+# Histogram with category labels
 # -----------------------------
 st.subheader("Suitability Histogram")
 
-fig, ax = plt.subplots(figsize=(5, 4))
+# Category labels in order
+class_labels = [
+    "neutral",
+    "possible",
+    "unsuitable",
+    "suitable",
+    "highly suitable"
+]
+
+# Numerical x positions (for plotting)
+x_positions = [1, 2, 3, 4, 5]
+
+fig, ax = plt.subplots(figsize=(6, 4))
 ax.hist(valid_values, bins=[1,2,3,4,5,6], edgecolor='black', color='green')
-ax.set_xticks([1,2,3,4,5])
+
+# Replace numeric ticks with class labels
+ax.set_xticks(x_positions)
+ax.set_xticklabels(class_labels, rotation=30, ha='right')
+
 ax.set_xlabel("Suitability Class")
 ax.set_ylabel("Frequency")
+ax.set_title("Distribution of Suitability Classes")
+
 st.pyplot(fig)
 
 # -----------------------------
@@ -114,3 +132,4 @@ legend_dict = {
 m.add_legend(title="Suitability Classes", legend_dict=legend_dict)
 
 m.to_streamlit(height=650)
+
