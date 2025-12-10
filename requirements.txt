@@ -1,7 +1,9 @@
 streamlit
-pandas
 numpy
+pandas
 matplotlib
-leafmap==0.20.3
+imageio
+leafmap
 requests
-Pillow
+
+
