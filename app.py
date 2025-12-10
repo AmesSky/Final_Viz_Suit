@@ -1,128 +1,142 @@
 import streamlit as st
-import leafmap.foliumap as leafmap
 import numpy as np
-import imageio.v3 as iio
+import rasterio
 import matplotlib.pyplot as plt
+import leafmap.foliumap as leafmap
+from streamlit.components.v1 import html
 
-st.set_page_config(page_title="Salt Lake City Suitability Web App", layout="wide")
+# ----------------------------
+# PAGE SETUP
+# ----------------------------
+st.set_page_config(page_title="Salt Lake Suitability Explorer", layout="wide")
 
-st.title("🏙️ Salt Lake City Vertiport Suitability Analysis")
-st.write("Explore suitability raster layers using an interactive map and charts.")
+st.title("🌄 Salt Lake City Suitability Analysis Web App")
+st.markdown("Explore suitability raster layers using an interactive map and charts.")
 
-# ---------------------------------------
-# LOCAL RASTER FILES
-# ---------------------------------------
-raster_paths = {
-    "Vacant Land Suitability": "SLC_Suit_VC.tif",
-    "Commercial/Industrial Suitability": "SLC_Suit_CI.tif",
+# ----------------------------
+# RASTER DATA (GitHub URLs)
+# ----------------------------
+RASTER_URLS = {
+    "Vacant Land Suitability": "https://raw.githubusercontent.com/AmesSky/Final_Viz_Suit/main/SLC_Suit_VC.tif",
+    "Commercial Suitability": "https://raw.githubusercontent.com/AmesSky/Final_Viz_Suit/main/SLC_Suit_CI.tif",
 }
 
+selected_raster = st.sidebar.selectbox("Select a suitability raster:", list(RASTER_URLS.keys()))
+raster_path = RASTER_URLS[selected_raster]
 
-# ---------------------------------------
-# Load raster
-# ---------------------------------------
+
+# ----------------------------
+# LOAD RASTER SAFELY
+# ----------------------------
 @st.cache_data
-def load_tif(path):
-    arr = iio.imread(path)
-    return arr.astype(np.int32)
+def load_raster(raster_url):
+    with rasterio.open(raster_url) as src:
+        arr = src.read(1)
+        profile = src.profile
+        bounds = src.bounds
+    return arr, profile, bounds
 
 
-# ---------------------------------------
-# Suitability value → color mapping
-# ---------------------------------------
+arr, profile, bounds = load_raster(raster_path)
+
+st.subheader("Raster Information")
+st.write(f"Shape: {arr.shape}")
+st.write(f"Min value: {np.min(arr)}, Max value: {np.max(arr)}")
+
+unique_vals = np.unique(arr)
+st.write("Unique raster values:", unique_vals)
+
+
+# ----------------------------
+# HISTOGRAM (STATIC)
+# ----------------------------
+st.subheader("Suitability Histogram")
+
+fig, ax = plt.subplots(figsize=(6, 3))
+
+ax.hist(arr.flatten(), bins=len(unique_vals), edgecolor="black")
+ax.set_title("Distribution of Raster Values")
+ax.set_xlabel("Suitability Value")
+ax.set_ylabel("Count")
+
+st.pyplot(fig)
+
+
+# ----------------------------
+# SUITABILITY COLOR MAP
+# ----------------------------
 color_map = {
-    1: "#BEBEBE",  # neutral (gray)
-    2: "#FFD700",  # possible (gold)
-    3: "#FF4500",  # unsuitable (orange-red)
-    4: "#32CD32",  # suitable (green)
-    5: "#FF0000",  # highly suitable (red)
+    1: "#BEBEBE",   # neutral (gray)
+    2: "#FFD700",   # possible (yellow)
+    3: "#800080",   # unsuitable (purple)
+    4: "#00FF00",   # suitable (green)
+    5: "#FF0000",   # highly suitable (red)
 }
 
-label_map = {
-    1: "neutral",
-    2: "possible",
-    3: "unsuitable",
-    4: "suitable",
-    5: "highly suitable",
-}
+st.subheader("Interactive Suitability Map")
 
-# ---------------------------------------
-# Sidebar selection
-# ---------------------------------------
-selected_layer = st.sidebar.selectbox("📂 Choose a raster layer", list(raster_paths.keys()))
-raster_file = raster_paths[selected_layer]
+# ----------------------------
+# LEAFMAP SETUP (FOLIUM BACKEND)
+# ----------------------------
+m = leafmap.Map(center=[40.75, -111.9], zoom=10)
 
-# ---------------------------------------
-# Load raster
-# ---------------------------------------
-arr = load_tif(raster_file)
-unique_values = np.unique(arr)
+# Add basemap
+m.add_basemap("HYBRID")
 
-st.subheader("Raster Summary")
-col1, col2 = st.columns(2)
-with col1:
-    st.write("**Unique values found in raster:**", unique_values.tolist())
-with col2:
-    st.write(f"**Shape:** {arr.shape}")
 
-# ---------------------------------------
-# Build colored PNG for map overlay
-# ---------------------------------------
-def raster_to_rgb(raster):
-    rgb = np.zeros((raster.shape[0], raster.shape[1], 3), dtype=np.uint8)
-    for val, hex_color in color_map.items():
-        mask = raster == val
-        rgb[mask] = tuple(int(hex_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+# ----------------------------
+# BUILD COLOR OVERLAY PNG
+# ----------------------------
+def create_color_png(arr):
+    """Convert classified raster to an RGB image for overlay."""
+    rgb = np.zeros((arr.shape[0], arr.shape[1], 3), dtype=np.uint8)
+
+    for value, hex_color in color_map.items():
+        rgb[arr == value] = tuple(int(hex_color[i:i+2], 16) for i in (1, 3, 5))
+
     return rgb
 
 
-rgb_img = raster_to_rgb(arr)
-iio.imwrite("colored_temp.png", rgb_img)
+rgb_image = create_color_png(arr)
 
 
-# ---------------------------------------
-# Interactive Map
-# ---------------------------------------
-st.subheader("🗺️ Interactive Suitability Map")
+# ----------------------------
+# ADD RASTER TO MAP
+# ----------------------------
+# Build bounds for folium
+img_bounds = [
+    [bounds.bottom, bounds.left],
+    [bounds.top, bounds.right],
+]
 
-m = leafmap.Map(center=[40.75, -111.9], zoom=11)
-
-# Add basemap
-m.add_basemap("CartoDB.Positron")
-
-# Add raster overlay
 m.add_image(
-    "colored_temp.png",
-    bounds=[[40.45, -112.2], [41.1, -111.6]],  # adjust if needed
-    opacity=0.75,
-    name=selected_layer,
+    rgb_image,
+    img_bounds,
+    opacity=0.7,
+    name=selected_raster
 )
 
-m.to_streamlit(width=900, height=600)
+m.add_layer_control()
 
 
-# ---------------------------------------
-# Legend
-# ---------------------------------------
-st.subheader("📌 Suitability Legend")
+# ----------------------------
+# RENDER FULLY INTERACTIVE MAP
+# ----------------------------
+map_html = m.to_html()
+html(map_html, height=700)
 
-for val, label in label_map.items():
+
+# ----------------------------
+# LEGEND
+# ----------------------------
+st.subheader("Legend")
+for label, color in zip(
+        ["neutral", "possible", "unsuitable", "suitable", "highly suitable"],
+        ["#BEBEBE", "#FFD700", "#800080", "#00FF00", "#FF0000"]):
+
     st.markdown(
         f"<div style='display:flex;align-items:center;'>"
-        f"<div style='width:20px;height:20px;background:{color_map[val]};"
-        f"margin-right:10px;'></div> {val} – {label}</div>",
-        unsafe_allow_html=True,
+        f"<div style='width:20px;height:20px;background:{color};margin-right:10px;'></div>"
+        f"{label}</div>",
+        unsafe_allow_html=True
     )
-
-
-# ---------------------------------------
-# Histogram Section
-# ---------------------------------------
-st.subheader("📊 Suitability Value Histogram")
-
-fig, ax = plt.subplots(figsize=(7, 4))
-ax.hist(arr.flatten(), bins=range(1, 7), edgecolor="black", color="#4682B4")
-ax.set_title("Distribution of Suitability Classes")
-ax.set_xlabel("Suitability Class")
-ax.set_ylabel("Frequency")
-st.pyplot(fig)
